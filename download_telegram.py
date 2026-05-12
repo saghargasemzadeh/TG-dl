@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import json
 import time
 import requests
 
@@ -17,10 +18,13 @@ def clean_filename(name):
 
 
 def download(url, path):
+
     r = requests.get(url, stream=True)
 
     if r.status_code == 200:
+
         with open(path, "wb") as f:
+
             for chunk in r.iter_content(1024):
                 f.write(chunk)
 
@@ -38,9 +42,17 @@ def main(link):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
+    # enable network logs
+    options.set_capability("goog:loggingPrefs", {
+        "performance": "ALL"
+    })
+
     service = Service(ChromeDriverManager().install())
 
-    driver = webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(
+        service=service,
+        options=options
+    )
 
     embed_url = link + "?embed=1&mode=tme"
 
@@ -48,7 +60,7 @@ def main(link):
 
     driver.get(embed_url)
 
-    time.sleep(8)
+    time.sleep(10)
 
     folder = clean_filename(
         link.replace("https://", "").replace("/", "_")
@@ -59,77 +71,77 @@ def main(link):
     found = False
 
     # -------------------------
-    # VIDEO
+    # CLICK VIDEO IF EXISTS
     # -------------------------
 
-    videos = driver.find_elements(By.TAG_NAME, "video")
+    try:
 
-    for i, video in enumerate(videos, start=1):
+        video = driver.find_element(By.TAG_NAME, "video")
 
-        src = video.get_attribute("src")
+        driver.execute_script("""
+            arguments[0].play();
+        """, video)
 
-        if src and "cdn" in src:
+        print("▶️ Video playback triggered")
 
-            found = True
+        time.sleep(5)
 
-            print("🎬 Video:", src)
-
-            download(
-                src,
-                os.path.join(folder, f"video_{i}.mp4")
-            )
+    except Exception:
+        pass
 
     # -------------------------
-    # SOURCE TAGS
+    # READ NETWORK LOGS
     # -------------------------
 
-    sources = driver.find_elements(By.TAG_NAME, "source")
+    logs = driver.get_log("performance")
 
-    for i, source in enumerate(sources, start=1):
+    media_urls = set()
 
-        src = source.get_attribute("src")
+    for entry in logs:
 
-        if src and "cdn" in src:
+        try:
 
-            found = True
+            message = json.loads(entry["message"])
 
-            print("🎬 Source:", src)
+            message = message["message"]
 
-            download(
-                src,
-                os.path.join(folder, f"source_video_{i}.mp4")
-            )
+            if message["method"] != "Network.responseReceived":
+                continue
 
-    # -------------------------
-    # REAL MEDIA IMAGES
-    # -------------------------
+            response = message["params"]["response"]
 
-    imgs = driver.find_elements(By.TAG_NAME, "img")
+            url = response.get("url", "")
 
-    img_count = 0
+            mime = response.get("mimeType", "")
 
-    for img in imgs:
+            # detect real media
+            if (
+                ".mp4" in url
+                or "video" in mime
+            ):
 
-        src = img.get_attribute("src")
+                media_urls.add(url)
 
-        if not src:
+        except Exception:
             continue
 
-        # skip avatars/thumbnails
-        if "emoji" in src:
-            continue
+    # -------------------------
+    # DOWNLOAD VIDEOS
+    # -------------------------
 
-        if "photo" in src or "cdn" in src:
+    count = 0
 
-            img_count += 1
-            found = True
+    for url in media_urls:
 
-            print("🖼 Image:", src)
+        count += 1
+        found = True
 
-            download(
-                src,
-                os.path.join(folder, f"image_{img_count}.jpg")
-            )
+        print("🎬 Found media:", url)
+
+        download(
+            url,
+            os.path.join(folder, f"video_{count}.mp4")
+        )
 
     # -------------------------
     # CAPTION
@@ -158,7 +170,7 @@ def main(link):
     driver.quit()
 
     if not found:
-        print("❌ No media found")
+        print("❌ No video/media found")
 
 
 if __name__ == "__main__":
