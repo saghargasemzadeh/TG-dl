@@ -4,11 +4,11 @@ import sys
 import time
 import requests
 
-from bs4 import BeautifulSoup
-
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+
 from webdriver_manager.chrome import ChromeDriverManager
 
 
@@ -25,18 +25,21 @@ def download(url, path):
                 f.write(chunk)
 
         print("✅ Downloaded:", path)
+
     else:
         print("❌ Failed:", url)
 
 
 def main(link):
+
     options = Options()
 
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
     service = Service(ChromeDriverManager().install())
+
     driver = webdriver.Chrome(service=service, options=options)
 
     embed_url = link + "?embed=1&mode=tme"
@@ -45,13 +48,7 @@ def main(link):
 
     driver.get(embed_url)
 
-    time.sleep(5)
-
-    html = driver.page_source
-
-    driver.quit()
-
-    soup = BeautifulSoup(html, "html.parser")
+    time.sleep(8)
 
     folder = clean_filename(
         link.replace("https://", "").replace("/", "_")
@@ -59,69 +56,109 @@ def main(link):
 
     os.makedirs(folder, exist_ok=True)
 
-    # ------------------------
-    # Caption
-    # ------------------------
+    found = False
 
-    caption = ""
+    # -------------------------
+    # VIDEO
+    # -------------------------
 
-    desc = soup.find("meta", {"property": "og:description"})
+    videos = driver.find_elements(By.TAG_NAME, "video")
 
-    if desc:
-        caption = desc.get("content", "")
+    for i, video in enumerate(videos, start=1):
 
-        with open(os.path.join(folder, "caption.txt"), "w", encoding="utf-8") as f:
+        src = video.get_attribute("src")
+
+        if src and "cdn" in src:
+
+            found = True
+
+            print("🎬 Video:", src)
+
+            download(
+                src,
+                os.path.join(folder, f"video_{i}.mp4")
+            )
+
+    # -------------------------
+    # SOURCE TAGS
+    # -------------------------
+
+    sources = driver.find_elements(By.TAG_NAME, "source")
+
+    for i, source in enumerate(sources, start=1):
+
+        src = source.get_attribute("src")
+
+        if src and "cdn" in src:
+
+            found = True
+
+            print("🎬 Source:", src)
+
+            download(
+                src,
+                os.path.join(folder, f"source_video_{i}.mp4")
+            )
+
+    # -------------------------
+    # REAL MEDIA IMAGES
+    # -------------------------
+
+    imgs = driver.find_elements(By.TAG_NAME, "img")
+
+    img_count = 0
+
+    for img in imgs:
+
+        src = img.get_attribute("src")
+
+        if not src:
+            continue
+
+        # skip avatars/thumbnails
+        if "emoji" in src:
+            continue
+
+        if "photo" in src or "cdn" in src:
+
+            img_count += 1
+            found = True
+
+            print("🖼 Image:", src)
+
+            download(
+                src,
+                os.path.join(folder, f"image_{img_count}.jpg")
+            )
+
+    # -------------------------
+    # CAPTION
+    # -------------------------
+
+    try:
+
+        caption = driver.find_element(
+            By.CLASS_NAME,
+            "tgme_widget_message_text"
+        ).text
+
+        with open(
+            os.path.join(folder, "caption.txt"),
+            "w",
+            encoding="utf-8"
+        ) as f:
+
             f.write(caption)
 
         print("📝 Caption saved")
 
-    # ------------------------
-    # VIDEO
-    # ------------------------
+    except Exception:
+        print("⚠️ No caption found")
 
-    videos = soup.find_all("video")
-
-    found = False
-
-    for i, video in enumerate(videos, start=1):
-
-        src = video.get("src")
-
-        if src:
-            found = True
-
-            path = os.path.join(folder, f"video_{i}.mp4")
-
-            print("🎬 Video found:", src)
-
-            download(src, path)
-
-    # ------------------------
-    # IMAGE
-    # ------------------------
-
-    imgs = soup.find_all("img")
-
-    for i, img in enumerate(imgs, start=1):
-
-        src = img.get("src")
-
-        if src and "telesco.pe/file/" in src:
-
-            # thumbnail/channel photo skip
-            if "emoji" in src:
-                continue
-
-            path = os.path.join(folder, f"image_{i}.jpg")
-
-            print("🖼 Image found:", src)
-
-            download(src, path)
-
-            found = True
+    driver.quit()
 
     if not found:
-        print("⚠️ No media found")
+        print("❌ No media found")
 
 
 if __name__ == "__main__":
