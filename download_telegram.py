@@ -3,16 +3,38 @@ import re
 import sys
 import requests
 from bs4 import BeautifulSoup
+import hashlib
+import random
+import string
 
-def clean_filename(name):
+def clean_filename(name, max_len=50):
     name = re.sub(r'[\\/*?:"<>|]', "_", name)
+    if len(name) > max_len:
+        ext = ""
+        if "." in name:
+            ext = "." + name.split(".")[-1]
+        hash_part = hashlib.md5(name.encode()).hexdigest()[:10]
+        name = name[:20] + "_" + hash_part + ext
     return name.strip()
 
-def download_file(url, output_folder):
-    local_name = url.split("/")[-1].split("?")[0]
-    local_name = clean_filename(local_name)
+def random_name(ext=""):
+    rand = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+    return rand + ext
 
-    path = os.path.join(output_folder, local_name)
+def download_file(url, output_folder):
+    # استخراج فرمت فایل
+    ext = ""
+    filename = url.split("/")[-1].split("?")[0]
+    if "." in filename:
+        ext = "." + filename.split(".")[-1]
+
+    safe_name = clean_filename(filename)
+
+    # اگر هنوز هم طولانی بود، اسم رندوم بده
+    if len(safe_name) > 60:
+        safe_name = random_name(ext)
+
+    path = os.path.join(output_folder, safe_name)
 
     print(f"⬇️ Downloading: {url}")
     r = requests.get(url, stream=True)
@@ -30,10 +52,9 @@ def download_from_telegram(link):
         print("❌ Invalid Telegram link")
         return
 
-    # Try embed mode (best for scraping)
     embed_url = link + "?embed=1&mode=tme"
-
     print(f"🌐 Loading: {embed_url}")
+
     response = requests.get(embed_url)
 
     if response.status_code != 200:
@@ -42,7 +63,6 @@ def download_from_telegram(link):
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    # Output folder (channel_message)
     folder_name = link.replace("https://", "").replace("/", "_")
     folder_name = clean_filename(folder_name)
 
@@ -51,24 +71,24 @@ def download_from_telegram(link):
 
     media_found = False
 
-    # ----- IMAGES -----
+    # Images
     for img in soup.select("img"):
         src = img.get("src")
-        if src and ("file" in src or "media" in src or "photo" in src):
+        if src and "file" in src:
             media_found = True
             download_file(src, folder_name)
 
-    # ----- VIDEOS -----
+    # Videos
     for video in soup.select("video"):
         src = video.get("src")
         if src:
             media_found = True
             download_file(src, folder_name)
 
-    # ----- DOCUMENTS -----
+    # Documents
     for a in soup.select("a"):
         href = a.get("href")
-        if href and ("file" in href or "media" in href or "document" in href):
+        if href and "file" in href:
             media_found = True
             download_file(href, folder_name)
 
