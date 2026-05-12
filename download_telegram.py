@@ -1,105 +1,131 @@
 import os
 import re
 import sys
+import time
 import requests
+
 from bs4 import BeautifulSoup
-import hashlib
-import random
-import string
 
-def clean_filename(name, max_len=50):
-    name = re.sub(r'[\\/*?:"<>|]', "_", name)
-    if len(name) > max_len:
-        ext = ""
-        if "." in name:
-            ext = "." + name.split(".")[-1]
-        hash_part = hashlib.md5(name.encode()).hexdigest()[:10]
-        name = name[:20] + "_" + hash_part + ext
-    return name.strip()
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
-def random_name(ext=""):
-    rand = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    return rand + ext
 
-def download_file(url, output_folder):
-    # استخراج فرمت فایل
-    ext = ""
-    filename = url.split("/")[-1].split("?")[0]
-    if "." in filename:
-        ext = "." + filename.split(".")[-1]
+def clean_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "_", name)
 
-    safe_name = clean_filename(filename)
 
-    # اگر هنوز هم طولانی بود، اسم رندوم بده
-    if len(safe_name) > 60:
-        safe_name = random_name(ext)
-
-    path = os.path.join(output_folder, safe_name)
-
-    print(f"⬇️ Downloading: {url}")
+def download(url, path):
     r = requests.get(url, stream=True)
 
     if r.status_code == 200:
         with open(path, "wb") as f:
             for chunk in r.iter_content(1024):
                 f.write(chunk)
-        print(f"✔ Saved: {path}")
-    else:
-        print(f"❌ Failed to download: {url}")
 
-def download_from_telegram(link):
-    if "t.me" not in link:
-        print("❌ Invalid Telegram link")
-        return
+        print("✅ Downloaded:", path)
+    else:
+        print("❌ Failed:", url)
+
+
+def main(link):
+    options = Options()
+
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(options=options)
 
     embed_url = link + "?embed=1&mode=tme"
-    print(f"🌐 Loading: {embed_url}")
 
-    response = requests.get(embed_url)
+    print("🌐 Opening:", embed_url)
 
-    if response.status_code != 200:
-        print("❌ Failed to load Telegram page.")
-        return
+    driver.get(embed_url)
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    time.sleep(5)
 
-    folder_name = link.replace("https://", "").replace("/", "_")
-    folder_name = clean_filename(folder_name)
+    html = driver.page_source
 
-    if not os.path.exists(folder_name):
-        os.makedirs(folder_name)
+    driver.quit()
 
-    media_found = False
+    soup = BeautifulSoup(html, "html.parser")
 
-    # Images
-    for img in soup.select("img"):
-        src = img.get("src")
-        if src and "file" in src:
-            media_found = True
-            download_file(src, folder_name)
+    folder = clean_filename(
+        link.replace("https://", "").replace("/", "_")
+    )
 
-    # Videos
-    for video in soup.select("video"):
+    os.makedirs(folder, exist_ok=True)
+
+    # ------------------------
+    # Caption
+    # ------------------------
+
+    caption = ""
+
+    desc = soup.find("meta", {"property": "og:description"})
+
+    if desc:
+        caption = desc.get("content", "")
+
+        with open(os.path.join(folder, "caption.txt"), "w", encoding="utf-8") as f:
+            f.write(caption)
+
+        print("📝 Caption saved")
+
+    # ------------------------
+    # VIDEO
+    # ------------------------
+
+    videos = soup.find_all("video")
+
+    found = False
+
+    for i, video in enumerate(videos, start=1):
+
         src = video.get("src")
+
         if src:
-            media_found = True
-            download_file(src, folder_name)
+            found = True
 
-    # Documents
-    for a in soup.select("a"):
-        href = a.get("href")
-        if href and "file" in href:
-            media_found = True
-            download_file(href, folder_name)
+            path = os.path.join(folder, f"video_{i}.mp4")
 
-    if not media_found:
-        print("⚠️ No media found in this post.")
-    else:
-        print("🎉 Download completed.")
+            print("🎬 Video found:", src)
+
+            download(src, path)
+
+    # ------------------------
+    # IMAGE
+    # ------------------------
+
+    imgs = soup.find_all("img")
+
+    for i, img in enumerate(imgs, start=1):
+
+        src = img.get("src")
+
+        if src and "telesco.pe/file/" in src:
+
+            # thumbnail/channel photo skip
+            if "emoji" in src:
+                continue
+
+            path = os.path.join(folder, f"image_{i}.jpg")
+
+            print("🖼 Image found:", src)
+
+            download(src, path)
+
+            found = True
+
+    if not found:
+        print("⚠️ No media found")
+
 
 if __name__ == "__main__":
+
     if len(sys.argv) < 2:
-        print("Usage: python download_telegram.py <telegram_link>")
+        print("Usage: python download_telegram.py <link>")
         sys.exit(1)
 
-    download_from_telegram(sys.argv[1])
+    main(sys.argv[1])
